@@ -3,13 +3,18 @@ package com.appcontrol
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
@@ -28,6 +33,24 @@ class BlockService : VpnService() {
 
     private var tunnel: ParcelFileDescriptor? = null
     private var listener: ListenerRegistration? = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Signal de vie envoyé toutes les minutes : le parent voit si l'enfant est "hors ligne". */
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            val code = Prefs.code(this@BlockService)
+            if (code != null) {
+                val dpm = getSystemService(DevicePolicyManager::class.java)
+                val admin = dpm.isAdminActive(ComponentName(this@BlockService, AdminReceiver::class.java))
+                FirebaseFirestore.getInstance().collection("devices").document(code)
+                    .set(
+                        mapOf("lastSeen" to FieldValue.serverTimestamp(), "adminActive" to admin),
+                        SetOptions.merge()
+                    )
+            }
+            handler.postDelayed(this, HEARTBEAT_MS)
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
@@ -48,6 +71,8 @@ class BlockService : VpnService() {
                     apply(snap?.getBoolean("blocked") ?: false, code, report = true)
                 }
         }
+        handler.removeCallbacks(heartbeat)
+        handler.post(heartbeat)
         return START_STICKY
     }
 
@@ -91,6 +116,7 @@ class BlockService : VpnService() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(heartbeat)
         listener?.remove()
         listener = null
         closeTunnel()
@@ -116,6 +142,7 @@ class BlockService : VpnService() {
     companion object {
         private const val TAG = "BlockService"
         private const val CHANNEL = "appcontrol"
+        private const val HEARTBEAT_MS = 60_000L
 
         fun start(c: Context) {
             c.startForegroundService(Intent(c, BlockService::class.java))

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aucune stratégie demandée : sert uniquement à rendre la désinstallation plus difficile. -->
+<device-admin>
+    <uses-policies />
+</device-admin>

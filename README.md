@@ -39,8 +39,16 @@ Les appels et SMS opérateur ne sont pas coupés (ils ne passent pas par l'IP).
    (une seule fois) et les notifications.
 3. Parent : appuyer sur le bouton pour bloquer / débloquer.
 
-## Limites de cette V1
+## Protection côté enfant
 
-L'enfant peut encore, depuis les réglages, couper le VPN ou désinstaller l'appli.
-Étapes suivantes possibles : VPN « toujours actif » avec blocage hors VPN,
-administrateur d'appareil (anti-désinstallation), puis mode Device Owner.
+- **Administrateur d'appareil** : à l'installation, l'enfant doit l'activer (écran Android).
+  Tant qu'il est actif, la désinstallation est refusée ; il faut d'abord le désactiver dans les réglages.
+- **Détection** : le téléphone de l'enfant envoie un signal toutes les minutes. L'écran parent affiche
+  « HORS LIGNE depuis X min » si l'app est arrêtée/désinstallée/sans réseau, et un avertissement
+  si l'administrateur est désactivé.
+
+## Limites
+
+L'enfant peut encore, s'il cherche, désactiver l'administrateur puis désinstaller, ou couper le VPN :
+le parent en est seulement averti. Pour une vraie interdiction : mode Device Owner (nécessite un téléphone
+réinitialisé) ou Google Family Link.

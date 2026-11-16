@@ -2,18 +2,23 @@ package com.appcontrol
 
 import android.Manifest
 import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
@@ -22,6 +27,8 @@ class MainActivity : Activity() {
 
     private lateinit var root: LinearLayout
     private var parentListener: ListenerRegistration? = null
+    private val ui = Handler(Looper.getMainLooper())
+    private var adminAsked = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,12 +43,14 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         parentListener?.remove()
+        ui.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
     private fun render() {
         parentListener?.remove()
         parentListener = null
+        ui.removeCallbacksAndMessages(null)
         root.removeAllViews()
         when (Prefs.role(this)) {
             Prefs.PARENT -> renderParent()
@@ -74,20 +83,39 @@ class MainActivity : Activity() {
         val status = text("…", 18f)
         val toggle = Button(this).apply { textSize = 22f; setPadding(32, 64, 32, 64) }
         var blocked = false
+        var last: DocumentSnapshot? = null
 
-        parentListener = doc.addSnapshotListener { snap, _ ->
+        fun refresh() {
+            val snap = last
             blocked = snap?.getBoolean("blocked") ?: false
             val applied = snap?.getBoolean("applied")
             toggle.text = if (blocked) "DÉBLOQUER la connexion" else "BLOQUER la connexion"
             toggle.setBackgroundColor(if (blocked) Color.rgb(46, 160, 67) else Color.rgb(207, 34, 46))
             toggle.setTextColor(Color.WHITE)
-            status.text = when {
+
+            val lastSeen = snap?.getTimestamp("lastSeen")?.toDate()?.time
+            val minutes = if (lastSeen == null) null else (System.currentTimeMillis() - lastSeen) / 60_000
+            val lines = mutableListOf<String>()
+            lines += when {
                 blocked && applied == true -> "Connexion de l'enfant : BLOQUÉE ✔"
                 blocked -> "Ordre envoyé… en attente du téléphone de l'enfant"
-                applied == false || applied == null -> "Connexion de l'enfant : normale"
-                else -> "Déblocage en cours…"
+                applied == true -> "Déblocage en cours…"
+                else -> "Connexion de l'enfant : normale"
             }
+            lines += when {
+                lastSeen == null -> "Téléphone de l'enfant : jamais vu"
+                minutes!! >= 3 -> "⚠ Enfant HORS LIGNE depuis $minutes min (app arrêtée, désinstallée ou sans réseau)"
+                else -> "Téléphone de l'enfant : en ligne ✔"
+            }
+            if (snap?.getBoolean("adminActive") == false) {
+                lines += "⚠ Protection anti-désinstallation désactivée sur le téléphone de l'enfant"
+            }
+            status.text = lines.joinToString("\n")
+            ui.removeCallbacksAndMessages(null)
+            ui.postDelayed({ refresh() }, 30_000) // met à jour "hors ligne depuis X min"
         }
+
+        parentListener = doc.addSnapshotListener { snap, _ -> last = snap; refresh() }
         toggle.setOnClickListener {
             doc.set(mapOf("blocked" to !blocked), SetOptions.merge())
         }
@@ -128,7 +156,26 @@ class MainActivity : Activity() {
             return
         }
         val vpn = VpnService.prepare(this)
-        if (vpn != null) startActivityForResult(vpn, REQ_VPN) else BlockService.start(this)
+        if (vpn != null) { startActivityForResult(vpn, REQ_VPN); return }
+        BlockService.start(this)
+        askAdmin()
+    }
+
+    /** Active l'administrateur d'appareil (anti-désinstallation), demandé une seule fois. */
+    private fun askAdmin() {
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        val admin = ComponentName(this, AdminReceiver::class.java)
+        if (dpm.isAdminActive(admin) || adminAsked) return
+        adminAsked = true
+        startActivityForResult(
+            Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                .putExtra(
+                    DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                    "Empêche la désinstallation du contrôle parental."
+                ),
+            REQ_ADMIN
+        )
     }
 
     @Deprecated("Deprecated in Java")
@@ -140,7 +187,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(rc: Int, result: Int, data: Intent?) {
         super.onActivityResult(rc, result, data)
-        if (rc == REQ_VPN && result == RESULT_OK) BlockService.start(this)
+        if (rc == REQ_VPN && result == RESULT_OK) { BlockService.start(this); askAdmin() }
     }
 
     // ---------- Petits helpers d'UI ----------
@@ -155,5 +202,6 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_NOTIF = 1
         private const val REQ_VPN = 2
+        private const val REQ_ADMIN = 3
     }
 }
